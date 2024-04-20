@@ -20,12 +20,12 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         max_val = tf.reduce_max([a, b, c])
 
-        tmp = \
+        rTotal = \
               tf.exp(a - max_val) \
             + tf.exp(b - max_val) \
             + tf.exp(c - max_val)
         
-        logarithm = tf.math.log(tmp) + max_val
+        logarithm = tf.math.log(rTotal) + max_val
         result = -gamma * logarithm
 
         return result
@@ -40,11 +40,18 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         # batch execution loop -> execution time : 13
         batch_Distances_ = self.batch_squared_euclidean_compute_tf(y_true, y_pred)
-        tmp = []
-        for b_i in range(0, batch_Distances_.shape[0]):
-            dis_ = self.unit_loss_from_D( batch_Distances_[b_i])
-            tmp.append(dis_)
-        return tf.reduce_sum(tf.convert_to_tensor(tmp))
+
+
+        # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
+        individualLossesForEachSequence = tf.map_fn(
+            self.unit_loss_from_D,
+            batch_Distances_
+        )
+
+        # Now we just sum over all sequences in the batch for a scalar return value.
+        return tf.reduce_sum(
+            tf.convert_to_tensor(individualLossesForEachSequence)
+        )
 
 
 
@@ -102,9 +109,12 @@ class SDTWLoss(tf.keras.losses.Loss):
             [[0, 0]],
             [0.0]
         )
+        
+        # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
+        # but only if the loop condition is a tensor itself.
+        for i in tf.range(1, m + 1):
+            for j in tf.range(1, n + 1):
 
-        for i in range(1, m + 1):
-            for j in range(1, n + 1):
                 # D is indexed starting from 0.
 
                 softMinimum = SDTWLoss.softmin3(
