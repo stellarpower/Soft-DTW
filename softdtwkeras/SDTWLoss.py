@@ -13,6 +13,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     # Native python implementation of the Cython version
     # This allows tensorflow to compile it in the graph, and so is actually optimal over using Cython
     @staticmethod
+    @tf.function
     def softmin3(a, b, c, gamma):
         a /= -gamma
         b /= -gamma
@@ -30,21 +31,29 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         return result
 
+    
+    # Not sure if instance methods can be tf.functions
+    # So forward to the static version
+    def call      (self, y_true, y_pred):
+        return SDTWLoss.callStatic(y_true, y_pred, self.gamma)
 
-    def call(self, y_true, y_pred):
+
+    @staticmethod
+    @tf.function
+    def callStatic(y_true, y_pred, gamma):
         # tmp = [] # execution time : 14 seconds
         # for b_i in range(0, y_true.shape[0]):
         #     dis_ = self.unit_loss(y_true[b_i], y_pred[b_i])
         #     tmp.append(dis_)
         # return tf.reduce_sum(tf.convert_to_tensor(tmp))
-
+    
         # batch execution loop -> execution time : 13
-        batch_Distances_ = self.batch_squared_euclidean_compute_tf(y_true, y_pred)
+        batch_Distances_ =  SDTWLoss.batch_squared_euclidean_compute_tf(y_true, y_pred)
 
 
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
         individualLossesForEachSequence = tf.map_fn(
-            self.unit_loss_from_D,
+            lambda sequence: SDTWLoss.unit_loss_from_D(sequence, gamma),
             batch_Distances_
         )
 
@@ -54,8 +63,10 @@ class SDTWLoss(tf.keras.losses.Loss):
         )
 
 
-
-    def squared_euclidean_compute_tf(self, a: tf.Tensor, b: tf.Tensor) -> None:
+    
+    @staticmethod
+    @tf.function
+    def squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> None:
         """
         # return pairwise euclidean difference matrix
         Args:
@@ -71,7 +82,9 @@ class SDTWLoss(tf.keras.losses.Loss):
         return pairwiseDistances
     
 
-    def batch_squared_euclidean_compute_tf(self, a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
+    @staticmethod
+    @tf.function
+    def batch_squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
         """
         Computes pairwise distances between each elements of A and each elements of B.
         Args:
@@ -94,8 +107,9 @@ class SDTWLoss(tf.keras.losses.Loss):
         return squared_diff
     
 
-
-    def unit_loss_from_D(self, D_):
+    @staticmethod
+    @tf.function
+    def unit_loss_from_D(D_,  gamma : tf.Tensor):
         m, n = tf.shape(D_)[0], tf.shape(D_)[1]
 
         # Allocate memory.
@@ -122,7 +136,7 @@ class SDTWLoss(tf.keras.losses.Loss):
                     loss[i - 1, j - 1],
                     loss[i    , j - 1],
                     
-                    self.gamma
+                    gamma
                 )
 
                 loss = tf.tensor_scatter_nd_update(
@@ -134,8 +148,12 @@ class SDTWLoss(tf.keras.losses.Loss):
         return loss[m, n]
 
 
-    def unit_loss(self, y_true, y_pred):
+    @staticmethod
+    @tf.function
+    def unit_loss(y_true, y_pred, gamma):
 
         D_ = self.squared_euclidean_compute_tf(y_true, y_pred)
 
-        return self.unit_loss_from_D(D_)
+        return SDTWLoss.unit_loss_from_D(D_, gamma)
+    
+
