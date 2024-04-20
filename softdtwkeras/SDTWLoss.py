@@ -152,7 +152,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     @tf.function
     def unit_loss(y_true, y_pred, gamma):
 
-        D_ = self.squared_euclidean_compute_tf(y_true, y_pred)
+        D_ = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
 
         return SDTWLoss.unit_loss_from_D(D_, gamma)
     
