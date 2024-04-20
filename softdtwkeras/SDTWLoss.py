@@ -10,6 +10,26 @@ class SDTWLoss(tf.keras.losses.Loss):
         self.gamma = tf.convert_to_tensor(gamma)
 
 
+    # Native python implementation of the Cython version
+    # This allows tensorflow to compile it in the graph, and so is actually optimal over using Cython
+    @staticmethod
+    def softmin3(a, b, c, gamma):
+        a /= -gamma
+        b /= -gamma
+        c /= -gamma
+
+        max_val = tf.reduce_max([a, b, c])
+
+        tmp = \
+              tf.exp(a - max_val) \
+            + tf.exp(b - max_val) \
+            + tf.exp(c - max_val)
+        
+        logarithm = tf.math.log(tmp) + max_val
+        result = -gamma * logarithm
+
+        return result
+
 
     def call(self, y_true, y_pred):
         # tmp = [] # execution time : 14 seconds
@@ -66,7 +86,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         return squared_diff
     
-    
+
 
     def unit_loss_from_D(self, D_):
         m, n = tf.shape(D_)[0], tf.shape(D_)[1]
@@ -74,7 +94,7 @@ class SDTWLoss(tf.keras.losses.Loss):
         # Allocate memory.
         loss = tf.fill(
             (m + 2, n + 2),
-            tf.constant(np.inf, dtype = tf.float32)
+            tf.constant(np.inf) # , dtype = tf.float32) # Todo - parameterise me later.
         )
 
         loss = tf.tensor_scatter_nd_update(
@@ -87,7 +107,7 @@ class SDTWLoss(tf.keras.losses.Loss):
             for j in range(1, n + 1):
                 # D is indexed starting from 0.
 
-                softMinimum = py_softmin3(
+                softMinimum = SDTWLoss.softmin3(
                     loss[i - 1, j    ],
                     loss[i - 1, j - 1],
                     loss[i    , j - 1],
