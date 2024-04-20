@@ -3,6 +3,11 @@
 
 This repository provides the implementation of Soft-DTW as loss function for batch processing in Keras/Tensorflow models. First, Euclidean distance matrix is calculated for whole batch at once. In the next step, each sample in the batch is traversed sequentially to calculate loss (distance). To speed up the process, [same](https://github.com/mblondel/soft-dtw/blob/master/sdtw/soft_dtw_fast.pyx) Cython function **`min(a,b,c, gamma)`** implemented by authors is used. 
 
+## Note
+**Cython is not needed in this branch**
+To support lazy execution through the TensorFlow graph, the Cython has been worked in as plain Python, which the graph-compiler will use and optimise for the backend. Therefore, you are free to skip the steps for compiling the Cython portion of the codebase.
+
+
 
 # python libraries
 As some python libraries are prerequisite to run this loss funciton. 
