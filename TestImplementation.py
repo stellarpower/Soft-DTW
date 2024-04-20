@@ -8,6 +8,12 @@ from softdtwkeras.SDTWLoss import SDTWLoss
 
 ScriptDirectory = os.path.dirname(os.path.realpath(__file__))
 
+# PRevent Tensorflow from pre-emptively allocating all the GPU memory.
+# Apart from inconvenience, this lets us see how much the implementation is using.
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
 
 class TestSDTWLoss:
 
@@ -50,12 +56,12 @@ class TestSDTWLoss:
             print(f"Computing array of shape { TestSDTWLoss.TestShape } for gamma of { gamma }")
 
             # Test against an instance for particular gamma
-            sdtwLoss = SDTWLoss(gamma=gamma)
+            # This should engage the graphcompiler and call through the backend
 
-            # Compute loss
+            sdtwLoss = SDTWLoss(gamma = gamma)
             loss = sdtwLoss.call(y_true, y_pred)
 
-            # Store the loss in the dictionary
+            # Store the loss for current gamma; we will compare all of them with known values later.
             self.losses[gamma] = loss.numpy()
 
         
