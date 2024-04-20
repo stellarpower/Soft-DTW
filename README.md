@@ -24,23 +24,36 @@ The execution of this loss function is tested on tf~v2. User can install `tensor
 `python setup.py build_ext --inplace`
 
 # Example
-```import tensorflow as tf
+```python
+
+import tensorflow as tf
 from tensorflow.keras import layers
 import numpy as np
 from tensorflow import keras
 
 from softdtwkeras.SDTWLoss import SDTWLoss
 
-np.random.seed(42)
-    input_data = np.random.random((128, 5, 2))
-    output_data = np.random.random((128, 3, 2))
 
-input_tensor = tf.convert_to_tensor(input_data, dtype=tf.float32)
-output_tensor = tf.convert_to_tensor(output_data, dtype=tf.float32)
+# Set to true for the network to calculate values literally; set to false
+# to use the TF graph-compiler to run automatically on GPU etc.
+# Should run faster if False.
+EagerExecution = False
+
+# Ensure repeatable results with random number generation
+np.random.seed(42)
+
+InputDataShape  = (128, 5, 2)
+OutputDataShape = (128, 3, 2)
+
+input_data  = np.random.random( InputDataShape)
+output_data = np.random.random(OutputDataShape)
+
+input_tensor  = tf.convert_to_tensor( input_data, dtype = tf.float32)
+output_tensor = tf.convert_to_tensor(output_data, dtype = tf.float32)
 
 # Define the model
 model = keras.Sequential([
-    layers.LSTM(64, return_sequences=True, input_shape=(5, 2)),
+    layers.LSTM(64, return_sequences = True, batch_input_shape = InputDataShape),
     layers.Dense(2),
     layers.TimeDistributed(layers.Dense(2)),
     layers.Lambda(lambda x: x[:, -3:, :])  # Select last 3 timesteps
@@ -49,9 +62,10 @@ model = keras.Sequential([
 lossclass_sdtw = SDTWLoss(gamma=0.5)
 
 # Compile the model with the custom loss function
-model.compile(optimizer='adam', loss=lossclass_sdtw, run_eagerly=True)
+model.compile(optimizer='adam', loss=lossclass_sdtw, run_eagerly = EagerExecution)
 
 model.fit(input_tensor, output_tensor, epochs=5)
+
 ```
 
 
