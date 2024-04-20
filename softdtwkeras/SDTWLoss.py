@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 
-from softdtwkeras.soft_dtw_fast import py_softmin3
 
 
 class SDTWLoss(tf.keras.losses.Loss):
