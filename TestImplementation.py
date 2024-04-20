@@ -3,8 +3,11 @@
 
 import numpy as np
 import tensorflow as tf
-import pickle
+import pickle, os
 from softdtwkeras.SDTWLoss import SDTWLoss
+
+ScriptDirectory = os.path.dirname(os.path.realpath(__file__))
+
 
 class TestSDTWLoss:
 
@@ -14,7 +17,7 @@ class TestSDTWLoss:
     #TestShape = (32, 512, 16)
     TestShape = (8, 32, 8)
 
-    Filename = './TestingLosses.pkl'
+    Filename = f"{ ScriptDirectory }/TestingLosses.pkl"
 
     def __init__(self):
         # We will test multiple gamma values, and store results for each value of gamma we test against.
@@ -31,8 +34,9 @@ class TestSDTWLoss:
         np.random.seed(0)
 
         # Generate 3D tensors of random numbers
-        y_true = np.random.rand( *TestSDTWLoss.TestShape )
-        y_pred = np.random.rand( *TestSDTWLoss.TestShape )
+        # Fixme - the loss should be parameterised on the intermediate computation type.
+        y_true = np.random.rand( *TestSDTWLoss.TestShape ).astype('float32')
+        y_pred = np.random.rand( *TestSDTWLoss.TestShape ).astype('float32')
 
         # Convert numpy arrays to tensors
         y_true = tf.convert_to_tensor(y_true)
