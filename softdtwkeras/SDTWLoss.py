@@ -175,7 +175,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream):
         # Think we should return a tensor, not a scalar, but not sure
         
@@ -193,7 +193,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
     # One sequence in the batch.
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def backwardsOneSequence(unitLoss, distanceMatrix, lossMatrix, gamma, upstream):
 
         # TODO - can we just leave upstream in the higher scope?
