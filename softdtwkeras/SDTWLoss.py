@@ -3,6 +3,16 @@ import numpy as np
 
 
 
+# Can't seem to force tensorflow to run eagerly in general.
+# Maps etc. seem always to be compiled ot the graph.
+# This decorator effectively disables the tf.function decorator if eager execution is enabled.
+RunEagerly = True 
+
+def OptionalGraphFunction(func):
+    return func if RunEagerly else tf.function(func)
+    
+
+
 class SDTWLoss(tf.keras.losses.Loss):
     def __init__(self, gamma: float = 1.0):
         super(SDTWLoss, self).__init__()
@@ -38,23 +48,21 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     @staticmethod
-    @tf.custom_gradient
+    #@tf.custom_gradient
+    @OptionalGraphFunction
     def callStatic(y_true, y_pred, gamma):
-        
-        # tmp = [] # execution time : 14 seconds
-        # for b_i in range(0, y_true.shape[0]):
-        #     dis_ = self.unit_loss(y_true[b_i], y_pred[b_i])
-        #     tmp.append(dis_)
-        # return tf.reduce_sum(tf.convert_to_tensor(tmp))
-    
-        # batch execution loop -> execution time : 13
-        batch_Distances_ =  SDTWLoss.batch_squared_euclidean_compute_tf(y_true, y_pred)
 
 
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
         individualLossesForEachSequence = tf.map_fn(
-            lambda sequence: SDTWLoss.unit_loss_from_D(sequence, gamma),
-            batch_Distances_
+
+            # map_fn does not expand the tuple; we need to explode it ourselves.
+            lambda asTuple: SDTWLoss.computeSingleSequenceLoss(*asTuple, gamma),
+            (y_true, y_pred),
+            
+            # We have to specify that the output is just a scalar value, and not a tensor, when te input and output shapes differ
+            # FIXME This is hardcoded single-precision float for now.
+            fn_output_signature=tf.float32, 
         )
 
         # Now we just sum over all sequences in the batch for a scalar return value.
@@ -71,10 +79,27 @@ class SDTWLoss(tf.keras.losses.Loss):
         return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, forwardCalculations, upstream)
 
 
+
+
+    # This should be applied on each sequence in the batch.
+    # These are separate, so we can do in parallel and make life easier and help the graph optimise.
+    @staticmethod
+    @OptionalGraphFunction
+    def computeSingleSequenceLoss(y_true, y_pred, gamma):
+
+        pairwiseDistanceMatrix = SDTWLoss.computePairwiseDistanceMatrix(y_true, y_pred)
+
+        unitLoss = SDTWLoss.unit_loss_from_D(pairwiseDistanceMatrix, gamma)
+
+        return unitLoss
+
+
+
+
     
     @staticmethod
-    @tf.function
-    def squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> None:
+    @OptionalGraphFunction
+    def computePairwiseDistanceMatrix(a: tf.Tensor, b: tf.Tensor) -> None:
         """
         # return pairwise euclidean difference matrix
         Args:
@@ -90,33 +115,13 @@ class SDTWLoss(tf.keras.losses.Loss):
         return pairwiseDistances
     
 
-    @staticmethod
-    @tf.function
-    def batch_squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
-        """
-        Computes pairwise distances between each elements of A and each elements of B.
-        Args:
-          A,                    [m,d] matrix
-          B,                    [n,d] matrix
-        Returns:
-          pairwiseDistances,    [m,n] matrix of pairwise distances
-        """
+    
+    
 
-        # Expand dimensions to enable broadcasting
-        a_expanded = tf.expand_dims(a, axis = 2)  # Shape: [batch, m, 1, d]
-        b_expanded = tf.expand_dims(b, axis = 1)  # Shape: [batch, 1, n, d]
-
-        # Compute pairwise squared Euclidean distances
-        squared_diff = tf.reduce_sum(
-            tf.square(a_expanded - b_expanded),
-            axis = -1
-        )  # Shape: [batch, m, n]
-
-        return squared_diff
     
 
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def unit_loss_from_D(D_,  gamma : tf.Tensor):
         m, n = tf.shape(D_)[0], tf.shape(D_)[1]
 
@@ -156,13 +161,6 @@ class SDTWLoss(tf.keras.losses.Loss):
         return loss[m, n]
 
 
-    @staticmethod
-    @tf.function
-    def unit_loss(y_true, y_pred, gamma):
-
-        D_ = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
-
-        return SDTWLoss.unit_loss_from_D(D_, gamma)
     
 
     @staticmethod
