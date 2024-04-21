@@ -101,29 +101,6 @@ class SDTWLoss(tf.keras.losses.Loss):
         return squared_diff
     
 
-    @staticmethod
-    @OptionalGraphFunction
-    def batch_squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
-        """
-        Computes pairwise distances between each elements of A and each elements of B.
-        Args:
-          A,                    [m,d] matrix
-          B,                    [n,d] matrix
-        Returns:
-          pairwiseDistances,    [m,n] matrix of pairwise distances
-        """
-
-        # Expand dimensions to enable broadcasting
-        a_expanded = tf.expand_dims(a, axis = 2)  # Shape: [batch, m, 1, d]
-        b_expanded = tf.expand_dims(b, axis = 1)  # Shape: [batch, 1, n, d]
-
-        # Compute pairwise squared Euclidean distances
-        squared_diff = tf.reduce_sum(
-            tf.square(a_expanded - b_expanded),
-            axis = -1
-        )  # Shape: [batch, m, n]
-
-        return squared_diff
     
 
     @staticmethod
