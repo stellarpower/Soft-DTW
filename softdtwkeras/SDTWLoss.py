@@ -6,7 +6,7 @@ import numpy as np
 # Can't seem to force tensorflow to run eagerly in general.
 # Maps etc. seem always to be compiled ot the graph.
 # This decorator effectively disables the tf.function decorator if eager execution is enabled.
-RunEagerly = True 
+RunEagerly = False #True 
 
 def OptionalGraphFunction(func):
     return func if RunEagerly else tf.function(func)
@@ -48,8 +48,8 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     @staticmethod
-    #@tf.custom_gradient
-    @OptionalGraphFunction
+    @tf.custom_gradient
+    #@OptionalGraphFunction
     def callStatic(y_true, y_pred, gamma):
 
 
