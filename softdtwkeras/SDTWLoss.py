@@ -50,14 +50,6 @@ class SDTWLoss(tf.keras.losses.Loss):
     @staticmethod
     @OptionalGraphFunction
     def callStatic(y_true, y_pred, gamma):
-        # tmp = [] # execution time : 14 seconds
-        # for b_i in range(0, y_true.shape[0]):
-        #     dis_ = self.unit_loss(y_true[b_i], y_pred[b_i])
-        #     tmp.append(dis_)
-        # return tf.reduce_sum(tf.convert_to_tensor(tmp))
-    
-        # batch execution loop -> execution time : 13
-
 
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
         individualLossesForEachSequence = tf.map_fn(
