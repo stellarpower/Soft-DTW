@@ -166,6 +166,9 @@ class SDTWLoss(tf.keras.losses.Loss):
                 lossMatrix = tf.tensor_scatter_nd_update(
                     lossMatrix,
                     [ [i, j] ],
+
+                    # i-1 and j-1 because that matrix is not padded;
+                    # the loss matrix has a "border" round it of 1 (2 extra elements)
                     [ distanceMatrix[i - 1, j - 1] + softMinimum ]
                 )
 
@@ -181,7 +184,9 @@ class SDTWLoss(tf.keras.losses.Loss):
         
         gradients = tf.map_fn(
             lambda resultsThisBatch: SDTWLoss.backwardsOneSequence(*resultsThisBatch, gamma, upstream),
-            forwardCalculations
+            forwardCalculations,
+
+            fn_output_signature = tf.float32,
         )
         
         # y_true is not a parameter, so, we return None.
@@ -197,7 +202,6 @@ class SDTWLoss(tf.keras.losses.Loss):
     def backwardsOneSequence(unitLoss, distanceMatrix, lossMatrix, gamma, upstream):
 
         # TODO - can we just leave upstream in the higher scope?
-        
 
         m, n = tf.shape(distanceMatrix)
 
@@ -208,13 +212,21 @@ class SDTWLoss(tf.keras.losses.Loss):
         # Called E in the paper
         gradients = tf.zeros(gradientsShape)
 
+        # Pad with one row/column of zeros at the beginning and at the end
+        # In order to match the loss matrix.
+        # TODO: We could decrement the indices below, but, thisi s easier to see for debugging.
+        paddings = tf.constant([[1, 1], [1, 1]])  
+        paddedDistanceMatrix = tf.pad(distanceMatrix, paddings, "CONSTANT")
+
+
+
         # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
         # but only if the loop condition is a tensor itself.
         for j in tf.range(m, 0, -1):
             for i in tf.range(n, 0, -1):
-                a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   distanceMatrix[i + 1, j    ]
-                b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   distanceMatrix[i,     j + 1]
-                c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   distanceMatrix[i + 1, j + 1]
+                a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j    ]
+                b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i,     j + 1]
+                c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j + 1]
 
                 a = tf.exp(a / gamma)
                 b = tf.exp(b / gamma)
@@ -227,7 +239,11 @@ class SDTWLoss(tf.keras.losses.Loss):
                      +  c * gradients[i + 1, j + 1]
                 )
 
-                gradients[i, j] = gradient
+                gradients = tf.tensor_scatter_nd_update(
+                    gradients,
+                    [[i, j]],
+                    [gradient]
+                )
 
 
 
