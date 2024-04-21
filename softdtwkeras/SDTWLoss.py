@@ -38,8 +38,9 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     @staticmethod
-    @tf.function
+    @tf.custom_gradient
     def callStatic(y_true, y_pred, gamma):
+        
         # tmp = [] # execution time : 14 seconds
         # for b_i in range(0, y_true.shape[0]):
         #     dis_ = self.unit_loss(y_true[b_i], y_pred[b_i])
@@ -57,9 +58,12 @@ class SDTWLoss(tf.keras.losses.Loss):
         )
 
         # Now we just sum over all sequences in the batch for a scalar return value.
-        return tf.reduce_sum(
+        result = tf.reduce_sum(
             tf.convert_to_tensor(individualLossesForEachSequence)
         )
+
+        # Now we have to return both the forward pass and the gradient function
+        return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, upstream)
 
 
     
@@ -154,5 +158,18 @@ class SDTWLoss(tf.keras.losses.Loss):
         D_ = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
 
         return SDTWLoss.unit_loss_from_D(D_, gamma)
+    
+
+    @staticmethod
+    @tf.function
+    def backwardPass(y_true, y_pred, upstream):
+        # Think we should return a tensor, not a scalar, but not sure
+        
+        # y_true is not a parameter, so, we return None.
+        breakpoint()
+
+        # FIXME - tensorflow thinks the gamma is aparameter, so, it expects a gradient for it.
+        # Return None for now, to disable computation
+        return None, upstream * y_pred, None
     
 
