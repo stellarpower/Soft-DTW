@@ -184,33 +184,57 @@ class SDTWLoss(tf.keras.losses.Loss):
         
         gradients = tf.map_fn(
             lambda resultsThisBatch: SDTWLoss.backwardsOneSequence(*resultsThisBatch, gamma, upstream),
-            forwardCalculations,
+            forwardCalculations + (y_true, y_pred),
 
             fn_output_signature = tf.float32,
         )
         
+
+
+
         # y_true is not a parameter, so, we return None.
         # FIXME - tensorflow thinks the gamma is aparameter, so, it expects a gradient for it.
         # Return None for now, to disable computation
-        return None, upstream * gradients, None
+
+        return None, tf.multiply(upstream, gradients), None
         
 
+
+
+    # Taken from here:
+    # https://github.com/lyprince/sdtw_pytorch/blob/11701a51f6094ed064e9f980939459a261ffe7a7/sdtw.py#L222C1-L230C52
+    #
+    # WARN - they seem to have the timesteps and featue vector axes in reverse.
+    # So we have altered the implementation here.
+    #
+    @staticmethod
+    @tf.function
+    def jacobean_product_squared_euclidean(y_true, y_pred, alignmentMatrix):
+        #ones = tf.ones( tf.shape(y_true) )
+        difference = y_true - y_pred
+        #gradient = (
+        #    tf.matmul(alignmentMatrix, y_true)
+        #    -
+        #    tf.matmul(alignmentMatrix, y_pred)
+        #)
+        gradient = tf.matmul(alignmentMatrix, difference)
+        return 2 * gradient
 
     # One sequence in the batch.
     @staticmethod
     @OptionalGraphFunction
-    def backwardsOneSequence(unitLoss, distanceMatrix, lossMatrix, gamma, upstream):
+    def backwardsOneSequence(unitLoss, distanceMatrix, lossMatrix, y_true, y_pred, gamma, upstream):
 
         # TODO - can we just leave upstream in the higher scope?
 
         m, n = tf.shape(distanceMatrix)[0], tf.shape(distanceMatrix)[1]
 
         # The gradient array needs to be padded to be larger than the original distances matrix
-        gradientsShape = (m + 2, n + 2)
+        alignmentsShape = (m + 2, n + 2)
         
         # Result for the gradients
         # Called E in the paper
-        gradients = tf.zeros(gradientsShape)
+        alignmentsMatrix = tf.zeros(alignmentsShape)
 
         # Pad with one row/column of zeros at the beginning and at the end
         # In order to match the loss matrix.
@@ -232,25 +256,33 @@ class SDTWLoss(tf.keras.losses.Loss):
                 b = tf.exp(b / gamma)
                 c = tf.exp(c / gamma)
 
-                gradient = (
+                alignment = (
 
-                        a * gradients[i + 1, j    ]
-                     +  b * gradients[i,     j + 1]
-                     +  c * gradients[i + 1, j + 1]
+                        a * alignmentsMatrix[i + 1, j    ]
+                     +  b * alignmentsMatrix[i,     j + 1]
+                     +  c * alignmentsMatrix[i + 1, j + 1]
                 )
 
-                gradients = tf.tensor_scatter_nd_update(
-                    gradients,
+                alignmentsMatrix = tf.tensor_scatter_nd_update(
+                    alignmentsMatrix,
                     [[i, j]],
-                    [gradient]
+                    [alignment]
                 )
 
 
 
         ## Andthen we need to remove the padding before returning
-        unpadded = gradients[1:(n + 1), 1:(m + 1)]
+        unpadded = alignmentsMatrix[1:(n + 1), 1:(m + 1)]
 
-        return unpadded
+        
+        # Implementation taken from here
+        # https://github.com/lyprince/sdtw_pytorch/blob/11701a51f6094ed064e9f980939459a261ffe7a7/sdtw.py#L195C13-L195C92
+        # In this code ,the timesteps and feature vector are reversed.
+        #permuted = tf.transpose(unpadded)
+        permuted = unpadded
+        gradients = SDTWLoss.jacobean_product_squared_euclidean(y_true, y_pred, permuted)
+
+        return gradients
     
 
                 
