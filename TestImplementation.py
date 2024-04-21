@@ -22,6 +22,7 @@ class TestSDTWLoss:
 
     #TestShape = (32, 512, 16)
     TestShape = (8, 32, 8)
+    #TestShape = (2, 32, 4)
 
     Filename = f"{ ScriptDirectory }/TestingLosses.pkl"
 
@@ -59,7 +60,13 @@ class TestSDTWLoss:
             # This should engage the graphcompiler and call through the backend
 
             sdtwLoss = SDTWLoss(gamma = gamma)
-            loss = sdtwLoss.call(y_true, y_pred)
+            loss, backwardsFunction = sdtwLoss.call(y_true, y_pred)
+            # turned off in this reverted branch
+            #loss = sdtwLoss.call(y_true, y_pred)
+
+            # NOw compute the backwards pass.
+            # Dummy upstream gradient of 1
+            gradients = backwardsFunction(1)
 
             # Store the loss for current gamma; we will compare all of them with known values later.
             self.losses[gamma] = loss.numpy()
@@ -88,7 +95,9 @@ class TestSDTWLoss:
     
 
 if __name__ == '__main__':
-    
+
+    tf.config.run_functions_eagerly(True)
+
     testCase = TestSDTWLoss()
 
     testCase.computeLoss()
