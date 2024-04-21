@@ -62,8 +62,13 @@ class SDTWLoss(tf.keras.losses.Loss):
             tf.convert_to_tensor(individualLossesForEachSequence)
         )
 
+        forwardCalculations = (
+            #batch_Distances_, result, "lengths", gamma, "bandwidth"
+            batch_Distances_, result, gamma,
+        )
+
         # Now we have to return both the forward pass and the gradient function
-        return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, upstream)
+        return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, forwardCalculations, upstream)
 
 
     
@@ -162,14 +167,72 @@ class SDTWLoss(tf.keras.losses.Loss):
 
     @staticmethod
     @tf.function
-    def backwardPass(y_true, y_pred, upstream):
+    def backwardPass(y_true, y_pred, forwardCalculations, upstream):
         # Think we should return a tensor, not a scalar, but not sure
         
-        # y_true is not a parameter, so, we return None.
-        breakpoint()
+        batch_Distances_, result, gamma, = forwardCalculations
+        
 
+        gradients = tf.map_fn(
+            lambda resultsThisBatch: SDTWLoss.backwardsOneBatch(resultsThisBatch, y_true, y_pred, forwardCalculations, upstream),
+            tf.zip(result, batch_Distances_)
+        )
+        
+        # y_true is not a parameter, so, we return None.
         # FIXME - tensorflow thinks the gamma is aparameter, so, it expects a gradient for it.
         # Return None for now, to disable computation
-        return None, upstream * y_pred, None
+        return None, upstream * gradients, None
+        
+
+
+    # One sequence in the batch.
+    @staticmethod
+    @tf.function
+    def backwardsOneBatch(resultsThisBatch, y_true, y_pred, forwardCalculations, upstream):
+        
+        # Unzip to get the distance matrix too
+        (resultThisBatch, batch_Distances_) = resultsThisBatch
+
+        #m, n, _lengths, gamma, _bandwidth = forwardCalculations
+        batch_Distances_, result, gamma, = forwardCalculations
+
+
+        m, n = tf.shape(batch_Distances_)[0], tf.shape(batch_Distances_)[1]
+
+        # The gradient array needs to be padded to be larger than the original distances matrix
+        gradientsShape = (m + 2, n + 2)
+        
+        # Result for the gradients
+        # Called E in the paper
+        gradients = tf.zeros(gradientsShape)
+
+        # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
+        # but only if the loop condition is a tensor itself.
+        for j in tf.range(m, 0, -1):
+            for i in tf.range(n, 0, -1):
+                a =  resultThisBatch[i + 1, j    ]   -   resultThisBatch[i, j]   -   batch_Distances_[i + 1, j    ]
+                b =  resultThisBatch[i,     j + 1]   -   resultThisBatch[i, j]   -   batch_Distances_[i,     j + 1]
+                c =  resultThisBatch[i + 1, j + 1]   -   resultThisBatch[i, j]   -   batch_Distances_[i + 1, j + 1]
+
+                a = tf.exp(a / gamma)
+                b = tf.exp(b / gamma)
+                c = tf.exp(c / gamma)
+
+                gradient = (
+
+                        a * gradients[i + 1, j    ]
+                     +  b * gradients[i,     j + 1]
+                     +  c * gradients[i + 1, j + 1]
+                )
+
+                gradients[i, j] = gradient
+
+
+
+        ## Andthen we need to remove the padding before returning
+        unpadded = gradients[1:(n + 1), 1:(m + 1)]
+
+        return unpadded
     
 
+                
