@@ -63,7 +63,7 @@ class SDTWLoss(tf.keras.losses.Loss):
             # We have to specify that the output is just a scalar value, and not a tensor, when te input and output shapes differ
             # FIXME: The second represents a tensor for the distance matrix, and it _not_ a scalar - but the dtype is sufficient to allow this to run.
             # FIXME This is hardcoded single-precision float for now.
-            fn_output_signature = (tf.float32, tf.float32)
+            fn_output_signature = (tf.float32, tf.float32, tf.float32)
         )
 
         # Now we just sum over all sequences in the batch for a scalar return value.
@@ -96,8 +96,8 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         unitLoss = lossMatrix[m, n]
 
-        # The distance matrix is needed for the backward pass, so return it too.
-        return (unitLoss, pairwiseDistanceMatrix)
+        # The distance and loss matrces are needed for the backward pass, so return these too.
+        return (unitLoss, pairwiseDistanceMatrix, lossMatrix)
 
 
 
