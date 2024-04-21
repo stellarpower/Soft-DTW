@@ -78,7 +78,7 @@ class SDTWLoss(tf.keras.losses.Loss):
         )
 
         # Now we have to return both the forward pass and the gradient function
-        return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, forwardCalculations, upstream)
+        return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream)
 
 
 
@@ -176,7 +176,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
     @staticmethod
     @tf.function
-    def backwardPass(y_true, y_pred, forwardCalculations, upstream):
+    def backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream):
         # Think we should return a tensor, not a scalar, but not sure
         
         unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence = forwardCalculations
