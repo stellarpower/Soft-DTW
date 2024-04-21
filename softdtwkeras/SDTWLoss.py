@@ -85,7 +85,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     @OptionalGraphFunction
     def computeSingleSequenceLoss(y_true, y_pred, gamma):
 
-        pairwiseDistanceMatrix = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
+        pairwiseDistanceMatrix = SDTWLoss.computePairwiseDistanceMatrix(y_true, y_pred)
 
         unitLoss = SDTWLoss.unit_loss_from_D(pairwiseDistanceMatrix, gamma)
 
@@ -97,7 +97,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     
     @staticmethod
     @OptionalGraphFunction
-    def squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> None:
+    def computePairwiseDistanceMatrix(a: tf.Tensor, b: tf.Tensor) -> None:
         """
         # return pairwise euclidean difference matrix
         Args:
