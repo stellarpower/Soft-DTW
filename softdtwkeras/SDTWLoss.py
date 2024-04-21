@@ -86,11 +86,19 @@ class SDTWLoss(tf.keras.losses.Loss):
         Returns:
           pairwiseDistances,    [m,n] matrix of pairwise distances
         """
-        pairwiseDistances = tf.reduce_sum(
-            (  tf.expand_dims(a, 1) - tf.expand_dims(b, 0)  ) ** 2,
-            2
-        )
-        return pairwiseDistances
+        breakpoint()
+        
+        # Expand dimensions to enable broadcasting
+        a_expanded = tf.expand_dims(a, axis = 1)  # Shape: [m, 1, d]
+        b_expanded = tf.expand_dims(b, axis = 0)  # Shape: [1, n, d]
+
+        # Compute pairwise squared Euclidean distances
+        squared_diff = tf.reduce_sum(
+            tf.square(a_expanded - b_expanded),
+            axis = -1
+        )  # Shape: [m, n]
+
+        return squared_diff
     
 
     @staticmethod
