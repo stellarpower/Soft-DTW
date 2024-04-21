@@ -179,12 +179,9 @@ class SDTWLoss(tf.keras.losses.Loss):
     def backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream):
         # Think we should return a tensor, not a scalar, but not sure
         
-        unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence = forwardCalculations
-        
-
         gradients = tf.map_fn(
             lambda resultsThisBatch: SDTWLoss.backwardsOneSequence(*resultsThisBatch, gamma, upstream),
-            (unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence)
+            forwardCalculations
         )
         
         # y_true is not a parameter, so, we return None.
