@@ -3,6 +3,16 @@ import numpy as np
 
 
 
+# Can't seem to force tensorflow to run eagerly in general.
+# Maps etc. seem always to be compiled ot the graph.
+# This decorator effectively disables the tf.function decorator if eager execution is enabled.
+RunEagerly = True 
+
+def OptionalGraphFunction(func):
+    return func if RunEagerly else tf.function(func)
+    
+
+
 class SDTWLoss(tf.keras.losses.Loss):
     def __init__(self, gamma: float = 1.0):
         super(SDTWLoss, self).__init__()
@@ -38,7 +48,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def callStatic(y_true, y_pred, gamma):
         # tmp = [] # execution time : 14 seconds
         # for b_i in range(0, y_true.shape[0]):
@@ -47,6 +57,8 @@ class SDTWLoss(tf.keras.losses.Loss):
         # return tf.reduce_sum(tf.convert_to_tensor(tmp))
     
         # batch execution loop -> execution time : 13
+
+
         batch_Distances_ =  SDTWLoss.batch_squared_euclidean_compute_tf(y_true, y_pred)
 
 
@@ -64,7 +76,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
     
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> None:
         """
         # return pairwise euclidean difference matrix
@@ -82,7 +94,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     
 
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def batch_squared_euclidean_compute_tf(a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
         """
         Computes pairwise distances between each elements of A and each elements of B.
@@ -107,7 +119,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     
 
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def unit_loss_from_D(D_,  gamma : tf.Tensor):
         m, n = tf.shape(D_)[0], tf.shape(D_)[1]
 
@@ -148,7 +160,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     @staticmethod
-    @tf.function
+    @OptionalGraphFunction
     def unit_loss(y_true, y_pred, gamma):
 
         D_ = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
