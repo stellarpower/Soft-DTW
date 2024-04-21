@@ -59,19 +59,39 @@ class SDTWLoss(tf.keras.losses.Loss):
         # batch execution loop -> execution time : 13
 
 
-        batch_Distances_ =  SDTWLoss.batch_squared_euclidean_compute_tf(y_true, y_pred)
-
-
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
         individualLossesForEachSequence = tf.map_fn(
-            lambda sequence: SDTWLoss.unit_loss_from_D(sequence, gamma),
-            batch_Distances_
+
+            # map_fn does not expand the tuple; we need to explode it ourselves.
+            lambda asTuple: SDTWLoss.computeSingleSequenceLoss(*asTuple, gamma),
+            (y_true, y_pred),
+            
+            # We have to specify that the output is just a scalar value, and not a tensor, when te input and output shapes differ
+            # FIXME This is hardcoded single-precision float for now.
+            fn_output_signature=tf.float32, 
         )
 
         # Now we just sum over all sequences in the batch for a scalar return value.
         return tf.reduce_sum(
             tf.convert_to_tensor(individualLossesForEachSequence)
         )
+
+
+
+
+    # This should be applied on each sequence in the batch.
+    # These are separate, so we can do in parallel and make life easier and help the graph optimise.
+    @staticmethod
+    @OptionalGraphFunction
+    def computeSingleSequenceLoss(y_true, y_pred, gamma):
+
+        pairwiseDistanceMatrix = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
+
+        unitLoss = SDTWLoss.unit_loss_from_D(pairwiseDistanceMatrix, gamma)
+
+        return unitLoss
+
+
 
 
     
@@ -86,7 +106,6 @@ class SDTWLoss(tf.keras.losses.Loss):
         Returns:
           pairwiseDistances,    [m,n] matrix of pairwise distances
         """
-        breakpoint()
         
         # Expand dimensions to enable broadcasting
         a_expanded = tf.expand_dims(a, axis = 1)  # Shape: [m, 1, d]
@@ -99,6 +118,7 @@ class SDTWLoss(tf.keras.losses.Loss):
         )  # Shape: [m, n]
 
         return squared_diff
+    
     
 
     
