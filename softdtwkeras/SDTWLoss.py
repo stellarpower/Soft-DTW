@@ -203,7 +203,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         # TODO - can we just leave upstream in the higher scope?
 
-        m, n = tf.shape(distanceMatrix)
+        m, n = tf.shape(distanceMatrix)[0], tf.shape(distanceMatrix)[1]
 
         # The gradient array needs to be padded to be larger than the original distances matrix
         gradientsShape = (m + 2, n + 2)
