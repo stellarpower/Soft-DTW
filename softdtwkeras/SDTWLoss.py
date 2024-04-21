@@ -90,7 +90,11 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         pairwiseDistanceMatrix = SDTWLoss.computePairwiseDistanceMatrix(y_true, y_pred)
 
-        unitLoss = SDTWLoss.unit_loss_from_D(pairwiseDistanceMatrix, gamma)
+        m, n = tf.shape(pairwiseDistanceMatrix)[0], tf.shape(pairwiseDistanceMatrix)[1]
+
+        lossMatrix = SDTWLoss.computeLossMatrixFromDistanceMatrix(pairwiseDistanceMatrix, gamma)
+
+        unitLoss = lossMatrix[m, n]
 
         # The distance matrix is needed for the backward pass, so return it too.
         return (unitLoss, pairwiseDistanceMatrix)
@@ -120,21 +124,25 @@ class SDTWLoss(tf.keras.losses.Loss):
     
     
 
-    
-
+    # _Think_ this is called "R" in the sleepwalking version
     @staticmethod
     @OptionalGraphFunction
-    def unit_loss_from_D(D_,  gamma : tf.Tensor):
-        m, n = tf.shape(D_)[0], tf.shape(D_)[1]
+    def computeLossMatrixFromDistanceMatrix(distanceMatrix : tf.Tensor,  gamma : tf.Tensor):
 
-        # Allocate memory.
-        loss = tf.fill(
+        m, n = tf.shape(distanceMatrix)[0], tf.shape(distanceMatrix)[1]
+
+        # Fill the matrix with infinities - presum to represent infinite distance
+        # An prevent an overflow at the edges.
+        # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L11
+        lossMatrix = tf.fill(
             (m + 2, n + 2),
             tf.constant(np.inf) # , dtype = tf.float32) # Todo - parameterise me later.
         )
 
-        loss = tf.tensor_scatter_nd_update(
-            loss,
+        # Set the top-left item to be zero - it has zero distance form itself(?)
+        # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L12
+        lossMatrix = tf.tensor_scatter_nd_update(
+            lossMatrix,
             [[0, 0]],
             [0.0]
         )
@@ -147,23 +155,23 @@ class SDTWLoss(tf.keras.losses.Loss):
                 # D is indexed starting from 0.
 
                 softMinimum = SDTWLoss.softmin3(
-                    loss[i - 1, j    ],
-                    loss[i - 1, j - 1],
-                    loss[i    , j - 1],
+                    lossMatrix[i - 1, j    ],
+                    lossMatrix[i - 1, j - 1],
+                    lossMatrix[i    , j - 1],
                     
                     gamma
                 )
 
-                loss = tf.tensor_scatter_nd_update(
-                    loss,
+                lossMatrix = tf.tensor_scatter_nd_update(
+                    lossMatrix,
                     [ [i, j] ],
-                    [ D_[i - 1, j - 1] + softMinimum ]
+                    [ distanceMatrix[i - 1, j - 1] + softMinimum ]
                 )
 
-        return loss[m, n]
-
-
+        return lossMatrix
     
+
+
 
     @staticmethod
     @tf.function
