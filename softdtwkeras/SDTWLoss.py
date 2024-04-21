@@ -54,7 +54,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
-        individualLossesForEachSequence, distanceMatricesForEachSequence = tf.map_fn(
+        unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence = tf.map_fn(
 
             # map_fn does not expand the tuple; we need to explode it ourselves.
             lambda asTuple: SDTWLoss.computeSingleSequenceLoss(*asTuple, gamma),
@@ -68,12 +68,13 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         # Now we just sum over all sequences in the batch for a scalar return value.
         result = tf.reduce_sum(
-            tf.convert_to_tensor(individualLossesForEachSequence)
+            tf.convert_to_tensor(unitLossesForEachSequence)
         )
 
         forwardCalculations = (
-            #batch_Distances_, result, "lengths", gamma, "bandwidth"
-            batch_Distances_, result, gamma,
+                  unitLossesForEachSequence,
+            distanceMatricesForEachSequence,
+                lossMatricesForEachSequence,
         )
 
         # Now we have to return both the forward pass and the gradient function
@@ -178,12 +179,12 @@ class SDTWLoss(tf.keras.losses.Loss):
     def backwardPass(y_true, y_pred, forwardCalculations, upstream):
         # Think we should return a tensor, not a scalar, but not sure
         
-        batch_Distances_, result, gamma, = forwardCalculations
+        unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence = forwardCalculations
         
 
         gradients = tf.map_fn(
-            lambda resultsThisBatch: SDTWLoss.backwardsOneBatch(resultsThisBatch, y_true, y_pred, forwardCalculations, upstream),
-            tf.zip(result, batch_Distances_)
+            lambda resultsThisBatch: SDTWLoss.backwardsOneSequence(*resultsThisBatch, gamma, upstream),
+            (unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence)
         )
         
         # y_true is not a parameter, so, we return None.
@@ -196,16 +197,12 @@ class SDTWLoss(tf.keras.losses.Loss):
     # One sequence in the batch.
     @staticmethod
     @tf.function
-    def backwardsOneBatch(resultsThisBatch, y_true, y_pred, forwardCalculations, upstream):
+    def backwardsOneSequence(unitLoss, distanceMatrix, lossMatrix, gamma, upstream):
+
+        # TODO - can we just leave upstream in the higher scope?
         
-        # Unzip to get the distance matrix too
-        (resultThisBatch, batch_Distances_) = resultsThisBatch
 
-        #m, n, _lengths, gamma, _bandwidth = forwardCalculations
-        batch_Distances_, result, gamma, = forwardCalculations
-
-
-        m, n = tf.shape(batch_Distances_)[0], tf.shape(batch_Distances_)[1]
+        m, n = tf.shape(distanceMatrix)
 
         # The gradient array needs to be padded to be larger than the original distances matrix
         gradientsShape = (m + 2, n + 2)
@@ -218,9 +215,9 @@ class SDTWLoss(tf.keras.losses.Loss):
         # but only if the loop condition is a tensor itself.
         for j in tf.range(m, 0, -1):
             for i in tf.range(n, 0, -1):
-                a =  resultThisBatch[i + 1, j    ]   -   resultThisBatch[i, j]   -   batch_Distances_[i + 1, j    ]
-                b =  resultThisBatch[i,     j + 1]   -   resultThisBatch[i, j]   -   batch_Distances_[i,     j + 1]
-                c =  resultThisBatch[i + 1, j + 1]   -   resultThisBatch[i, j]   -   batch_Distances_[i + 1, j + 1]
+                a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   distanceMatrix[i + 1, j    ]
+                b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   distanceMatrix[i,     j + 1]
+                c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   distanceMatrix[i + 1, j + 1]
 
                 a = tf.exp(a / gamma)
                 b = tf.exp(b / gamma)
@@ -244,3 +241,13 @@ class SDTWLoss(tf.keras.losses.Loss):
     
 
                 
+
+
+
+
+
+
+
+
+
+
