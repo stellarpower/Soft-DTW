@@ -164,12 +164,5 @@ class SDTWLoss(tf.keras.losses.Loss):
         return loss[m, n]
 
 
-    @staticmethod
-    @OptionalGraphFunction
-    def unit_loss(y_true, y_pred, gamma):
-
-        D_ = SDTWLoss.squared_euclidean_compute_tf(y_true, y_pred)
-
-        return SDTWLoss.unit_loss_from_D(D_, gamma)
     
 
