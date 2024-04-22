@@ -6,7 +6,7 @@ import numpy as np
 # Can't seem to force tensorflow to run eagerly in general.
 # Maps etc. seem always to be compiled ot the graph.
 # This decorator effectively disables the tf.function decorator if eager execution is enabled.
-RunEagerly = False #True 
+RunEagerly = True 
 
 def OptionalGraphFunction(func):
     return func if RunEagerly else tf.function(func)
@@ -88,7 +88,7 @@ class SDTWLoss(tf.keras.losses.Loss):
     @staticmethod
     @OptionalGraphFunction
     def computeSingleSequenceLoss(y_true, y_pred, gamma):
-
+        #breakpoint()
         pairwiseDistanceMatrix = SDTWLoss.computePairwiseDistanceMatrix(y_true, y_pred)
 
         m, n = tf.shape(pairwiseDistanceMatrix)[0], tf.shape(pairwiseDistanceMatrix)[1]
@@ -152,6 +152,15 @@ class SDTWLoss(tf.keras.losses.Loss):
         # but only if the loop condition is a tensor itself.
         for i in tf.range(1, m + 1):
             for j in tf.range(1, n + 1):
+                
+                # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L98C1-L100C1
+                if tf.math.is_inf(lossMatrix[i, j]): 
+                    lossMatrix = tf.tensor_scatter_nd_update(
+                        lossMatrix,
+                        [[i, j]],
+                        [-np.inf]
+                    )
+
 
                 # D is indexed starting from 0.
 
@@ -180,7 +189,8 @@ class SDTWLoss(tf.keras.losses.Loss):
     @staticmethod
     @OptionalGraphFunction
     def backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream):
-        # Think we should return a tensor, not a scalar, but not sure
+        # In Tensorflow, we need to return the gradients themselves - this should be a tensor of the same shape as 
+        # the GT/predictions. The torch implementation just returns the alignment matrix - see below.
         
         gradients = tf.map_fn(
             lambda resultsThisBatch: SDTWLoss.backwardsOneSequence(*resultsThisBatch, gamma, upstream),
@@ -228,26 +238,71 @@ class SDTWLoss(tf.keras.losses.Loss):
         # TODO - can we just leave upstream in the higher scope?
 
         m, n = tf.shape(distanceMatrix)[0], tf.shape(distanceMatrix)[1]
+        #breakpoint()
 
-        # The gradient array needs to be padded to be larger than the original distances matrix
+
+        ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+        # The alignments array needs to be padded to be larger than the original distances matrix
         alignmentsShape = (m + 2, n + 2)
         
-        # Result for the gradients
-        # Called E in the paper
-        alignmentsMatrix = tf.zeros(alignmentsShape)
 
+        # Called E in the paper
+        # Set to zero in general
+        alignmentsMatrix = tf.zeros(alignmentsShape)
+        # Set the bottom-right value as 1.
+        alignmentsMatrix = tf.tensor_scatter_nd_update(
+            alignmentsMatrix,
+            [[m + 1, n + 1]],
+            [1]
+
+        )
+
+
+        ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+        # Set the bottom and right edges of the loss
+        #
+        # __ LOSS_ 
+        #
+        # matrix to be negative infinity
+        # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L91
+        paddings = tf.constant([[0, 1], [0, 1]])  
+        lossMatrix = tf.pad(
+            lossMatrix[0 : -1,   0 : -1],    # Take off the bottom and right edges
+            paddings, "CONSTANT", constant_values = -np.inf
+        )
+        
+        # Copy the bottom-right value into the -infinity padding in the _loss_ matrix.
+        lossMatrix = tf.tensor_scatter_nd_update(
+            lossMatrix,
+            [[m + 1, n + 1]],
+            [ lossMatrix[m, n] ] # Need to wrap scalar value
+        )
+
+        ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+        
         # Pad with one row/column of zeros at the beginning and at the end
         # In order to match the loss matrix.
         # TODO: We could decrement the indices below, but, thisi s easier to see for debugging.
         paddings = tf.constant([[1, 1], [1, 1]])  
         paddedDistanceMatrix = tf.pad(distanceMatrix, paddings, "CONSTANT")
 
-
+        ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        #breakpoint()
 
         # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
         # but only if the loop condition is a tensor itself.
-        for j in tf.range(m, 0, -1):
-            for i in tf.range(n, 0, -1):
+
+        #for j in tf.range(m, 0, -1):
+        #    for i in tf.range(n, 0, -1):
+        # n then m?
+        # Makes no differense, still get NaNs.
+        for j in tf.range(n, 0, -1):
+            for i in tf.range(m, 0, -1):
+
                 a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j    ]
                 b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i,     j + 1]
                 c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j + 1]
@@ -269,6 +324,8 @@ class SDTWLoss(tf.keras.losses.Loss):
                     [alignment]
                 )
 
+        #breakpoint()
+
 
 
         ## Andthen we need to remove the padding before returning
@@ -281,6 +338,13 @@ class SDTWLoss(tf.keras.losses.Loss):
         #permuted = tf.transpose(unpadded)
         permuted = unpadded
         gradients = SDTWLoss.jacobean_product_squared_euclidean(y_true, y_pred, permuted)
+
+        # NOTE!
+        # The Torch versions all just return the alignment matrix E - this may be to do with how the distances are calculated.
+        # Assume that it may be the case the autodifferentiatior is handling the computation of the gradients for the
+        # Euclidean (or other) distance, and thus the alignment matrix is multiplied across by this to get the correct shape.
+        # Alternatively, maybe Torch handles the gradient tape differently.
+        # As we handle eqch sequence in the batch separately, it's easier to calculate it here.
 
         return gradients
     
