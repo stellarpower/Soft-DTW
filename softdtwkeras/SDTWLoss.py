@@ -6,17 +6,22 @@ import numpy as np
 # Can't seem to force tensorflow to run eagerly in general.
 # Maps etc. seem always to be compiled ot the graph.
 # This decorator effectively disables the tf.function decorator if eager execution is enabled.
-RunEagerly = True 
+RunEagerly = False #True 
 
 def OptionalGraphFunction(func):
     return func if RunEagerly else tf.function(func)
     
 
 
+
+
 class SDTWLoss(tf.keras.losses.Loss):
+
+
     def __init__(self, gamma: float = 1.0):
         super(SDTWLoss, self).__init__()
-        self.gamma = tf.convert_to_tensor(gamma)
+        self.gamma = tf.constant(gamma)
+
 
 
     # Native python implementation of the Cython version
@@ -47,38 +52,34 @@ class SDTWLoss(tf.keras.losses.Loss):
         return SDTWLoss.callStatic(y_true, y_pred, self.gamma)
 
 
+
+
+    # This function does not have a custom gradient - we map over the sequences in the batch. 
+    # So only computeSingleSequenceLoss() has a custom gradient
     @staticmethod
-    @tf.custom_gradient
-    #@OptionalGraphFunction
+    @OptionalGraphFunction
     def callStatic(y_true, y_pred, gamma):
 
 
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
-        unitLossesForEachSequence, distanceMatricesForEachSequence, lossMatricesForEachSequence = tf.map_fn(
+        unitLossesForEachSequence = tf.map_fn(
 
             # map_fn does not expand the tuple; we need to explode it ourselves.
             lambda asTuple: SDTWLoss.computeSingleSequenceLoss(*asTuple, gamma),
             (y_true, y_pred),
             
             # We have to specify that the output is just a scalar value, and not a tensor, when te input and output shapes differ
-            # FIXME: The second represents a tensor for the distance matrix, and it _not_ a scalar - but the dtype is sufficient to allow this to run.
             # FIXME This is hardcoded single-precision float for now.
-            fn_output_signature = (tf.float32, tf.float32, tf.float32)
+            fn_output_signature = (tf.float32)
+
         )
 
         # Now we just sum over all sequences in the batch for a scalar return value.
-        result = tf.reduce_sum(
+        summedLossForAllSequences = tf.reduce_sum(
             tf.convert_to_tensor(unitLossesForEachSequence)
         )
 
-        forwardCalculations = (
-                  unitLossesForEachSequence,
-            distanceMatricesForEachSequence,
-                lossMatricesForEachSequence,
-        )
-
-        # Now we have to return both the forward pass and the gradient function
-        return result, lambda upstream: SDTWLoss.backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream)
+        return summedLossForAllSequences
 
 
 
@@ -88,22 +89,24 @@ class SDTWLoss(tf.keras.losses.Loss):
     @staticmethod
     @OptionalGraphFunction
     def computeSingleSequenceLoss(y_true, y_pred, gamma):
-        #breakpoint()
+        
         pairwiseDistanceMatrix = SDTWLoss.computePairwiseDistanceMatrix(y_true, y_pred)
 
         m, n = tf.shape(pairwiseDistanceMatrix)[0], tf.shape(pairwiseDistanceMatrix)[1]
 
-        lossMatrix = SDTWLoss.computeLossMatrixFromDistanceMatrix(pairwiseDistanceMatrix, gamma)
+        # Scalar loss
+        # We no loner need to cache the full versions for the backward pass, seeing as we handle this
+        # on a per-sequence basis.
+        unitLoss = SDTWLoss.computeLossMatrixFromDistanceMatrix(pairwiseDistanceMatrix, m, n, gamma)
 
-        unitLoss = lossMatrix[m, n]
-
-        # The distance and loss matrces are needed for the backward pass, so return these too.
-        return (unitLoss, pairwiseDistanceMatrix, lossMatrix)
-
-
+        return unitLoss
 
 
-    
+
+
+    # We can now slot in a different distance function if we want - the graph compiler will automatically
+    # handle he differentiation for us here - we only need to return the alignment matrix, and the rest will
+    # be taken care of.
     @staticmethod
     @OptionalGraphFunction
     def computePairwiseDistanceMatrix(a: tf.Tensor, b: tf.Tensor) -> None:
@@ -119,87 +122,111 @@ class SDTWLoss(tf.keras.losses.Loss):
             (  tf.expand_dims(a, 1) - tf.expand_dims(b, 0)  ) ** 2,
             2
         )
+        
         return pairwiseDistances
     
 
     
     
 
-    # _Think_ this is called "R" in the sleepwalking version
+    # _Think_ this is called "R" in the sleepwalking version, for Result.
+    # This is the function that returns a cutom gradient. It has direct access to the intermediate calculations
+    # through capture and as it is just handling tihs sequence, this allows better parallelisation and is also conceptually
+    # easier to step through and debug.
     @staticmethod
-    @OptionalGraphFunction
-    def computeLossMatrixFromDistanceMatrix(distanceMatrix : tf.Tensor,  gamma : tf.Tensor):
-
-        m, n = tf.shape(distanceMatrix)[0], tf.shape(distanceMatrix)[1]
-
-        # Fill the matrix with infinities - presum to represent infinite distance
-        # An prevent an overflow at the edges.
-        # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L11
-        lossMatrix = tf.fill(
-            (m + 2, n + 2),
-            tf.constant(np.inf) # , dtype = tf.float32) # Todo - parameterise me later.
-        )
-
-        # Set the top-left item to be zero - it has zero distance form itself(?)
-        # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L12
-        lossMatrix = tf.tensor_scatter_nd_update(
-            lossMatrix,
-            [[0, 0]],
-            [0.0]
-        )
+    @tf.custom_gradient
+    def computeLossMatrixFromDistanceMatrix(distanceMatrix : tf.Tensor, m, n, gamma : tf.Tensor):
         
-        # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
-        # but only if the loop condition is a tensor itself.
-        for i in tf.range(1, m + 1):
-            for j in tf.range(1, n + 1):
-                
-                # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L98C1-L100C1
-                if tf.math.is_inf(lossMatrix[i, j]): 
-                    lossMatrix = tf.tensor_scatter_nd_update(
-                        lossMatrix,
-                        [[i, j]],
-                        [-np.inf]
+
+        # Because of the semantics of custom_gradient, unfortunately the range loop below won;t work in the main function
+        # We simply need to wrap the whole body in a tf.function - it is working eagerly or someething like that with the forward pass,
+        # not wrapping it properly
+        @tf.function
+        def wrapped(distanceMatrix, m, n):
+
+
+            # Fill the matrix with infinities - presum to represent infinite distance
+            # An prevent an overflow at the edges.
+            # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L11
+            lossMatrix = tf.fill(
+                (m + 2, n + 2),
+                tf.constant(np.inf) # , dtype = tf.float32) # Todo - parameterise me later.
+            )
+
+            # Set the top-left item to be zero - it has zero distance form itself(?)
+            # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L12
+            lossMatrix = tf.tensor_scatter_nd_update(
+                lossMatrix,
+                [[0, 0]],
+                [0.0]
+            )
+            
+            # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
+            # but only if the loop condition is a tensor itself.
+            for i in tf.range(1, m + 1):
+                for j in tf.range(1, n + 1):
+                    
+                    # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L98C1-L100C1
+                    if tf.math.is_inf(lossMatrix[i, j]): 
+                        lossMatrix = tf.tensor_scatter_nd_update(
+                            lossMatrix,
+                            [[i, j]],
+                            [-np.inf]
+                        )
+
+
+                    # D is indexed starting from 0.
+
+                    softMinimum = SDTWLoss.softmin3(
+                        lossMatrix[i - 1, j    ],
+                        lossMatrix[i - 1, j - 1],
+                        lossMatrix[i    , j - 1],
+                        
+                        gamma
                     )
 
+                    lossMatrix = tf.tensor_scatter_nd_update(
+                        lossMatrix,
+                        [ [i, j] ],
 
-                # D is indexed starting from 0.
+                        # i-1 and j-1 because that matrix is not padded;
+                        # the loss matrix has a "border" round it of 1 (2 extra elements)
+                        [ distanceMatrix[i - 1, j - 1] + softMinimum ]
+                    )
+            
+            return lossMatrix
+        
+        ## wrapped()
+        
 
-                softMinimum = SDTWLoss.softmin3(
-                    lossMatrix[i - 1, j    ],
-                    lossMatrix[i - 1, j - 1],
-                    lossMatrix[i    , j - 1],
-                    
-                    gamma
-                )
+        lossMatrix = wrapped(distanceMatrix, m, n)
 
-                lossMatrix = tf.tensor_scatter_nd_update(
-                    lossMatrix,
-                    [ [i, j] ],
+        def backwardsPass(upstream):
+            
+            alignmentGradients = SDTWLoss.backwardsOneSequence(distanceMatrix, lossMatrix, m, n, gamma)
+            gradients = tf.multiply(upstream, alignmentGradients)
 
-                    # i-1 and j-1 because that matrix is not padded;
-                    # the loss matrix has a "border" round it of 1 (2 extra elements)
-                    [ distanceMatrix[i - 1, j - 1] + softMinimum ]
-                )
+            # These are with reference ot the original arguments for the function above.
+            return gradients, None, None, None  #, None # Gamma is a constant: return None
 
-        return lossMatrix
+
+        return lossMatrix[m, n], backwardsPass
     
-
+    ## computeLossMatrixFromDistanceMatrix()
 
 
     @staticmethod
     @OptionalGraphFunction
     def backwardPass(y_true, y_pred, forwardCalculations, gamma, upstream):
+
         # In Tensorflow, we need to return the gradients themselves - this should be a tensor of the same shape as 
         # the GT/predictions. The torch implementation just returns the alignment matrix - see below.
-        
         gradients = tf.map_fn(
             lambda resultsThisBatch: SDTWLoss.backwardsOneSequence(*resultsThisBatch, gamma, upstream),
             forwardCalculations + (y_true, y_pred),
 
             fn_output_signature = tf.float32,
         )
-        
-
 
 
         # y_true is not a parameter, so, we return None.
@@ -208,38 +235,12 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         return None, tf.multiply(upstream, gradients), None
         
-
-
-
-    # Taken from here:
-    # https://github.com/lyprince/sdtw_pytorch/blob/11701a51f6094ed064e9f980939459a261ffe7a7/sdtw.py#L222C1-L230C52
-    #
-    # WARN - they seem to have the timesteps and featue vector axes in reverse.
-    # So we have altered the implementation here.
-    #
-    @staticmethod
-    @tf.function
-    def jacobean_product_squared_euclidean(y_true, y_pred, alignmentMatrix):
-        #ones = tf.ones( tf.shape(y_true) )
-        difference = y_true - y_pred
-        #gradient = (
-        #    tf.matmul(alignmentMatrix, y_true)
-        #    -
-        #    tf.matmul(alignmentMatrix, y_pred)
-        #)
-        gradient = tf.matmul(alignmentMatrix, difference)
-        return 2 * gradient
+    
 
     # One sequence in the batch.
     @staticmethod
     @OptionalGraphFunction
-    def backwardsOneSequence(unitLoss, distanceMatrix, lossMatrix, y_true, y_pred, gamma, upstream):
-
-        # TODO - can we just leave upstream in the higher scope?
-
-        m, n = tf.shape(distanceMatrix)[0], tf.shape(distanceMatrix)[1]
-        #breakpoint()
-
+    def backwardsOneSequence(distanceMatrix, lossMatrix, m, n, gamma):
 
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -261,11 +262,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-        # Set the bottom and right edges of the loss
-        #
-        # __ LOSS_ 
-        #
-        # matrix to be negative infinity
+        # Set the bottom and right edges of the **loss** matrix to be negative infinity
         # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L91
         paddings = tf.constant([[0, 1], [0, 1]])  
         lossMatrix = tf.pad(
@@ -291,15 +288,14 @@ class SDTWLoss(tf.keras.losses.Loss):
         paddedDistanceMatrix = tf.pad(distanceMatrix, paddings, "CONSTANT")
 
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        #breakpoint()
 
         # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
-        # but only if the loop condition is a tensor itself.
+        # but only if the loop condition is a tensor itself - so we need tf.range.
 
         #for j in tf.range(m, 0, -1):
         #    for i in tf.range(n, 0, -1):
-        # n then m?
-        # Makes no differense, still get NaNs.
+        # n then m? The torch versions assign the dimensions n then m, which is just confusing.
+        # We use m then n.
         for j in tf.range(n, 0, -1):
             for i in tf.range(m, 0, -1):
 
@@ -310,6 +306,7 @@ class SDTWLoss(tf.keras.losses.Loss):
                 a = tf.exp(a / gamma)
                 b = tf.exp(b / gamma)
                 c = tf.exp(c / gamma)
+
 
                 alignment = (
 
@@ -324,31 +321,13 @@ class SDTWLoss(tf.keras.losses.Loss):
                     [alignment]
                 )
 
-        #breakpoint()
-
-
 
         ## Andthen we need to remove the padding before returning
         unpadded = alignmentsMatrix[1:(n + 1), 1:(m + 1)]
 
-        
-        # Implementation taken from here
-        # https://github.com/lyprince/sdtw_pytorch/blob/11701a51f6094ed064e9f980939459a261ffe7a7/sdtw.py#L195C13-L195C92
-        # In this code ,the timesteps and feature vector are reversed.
-        #permuted = tf.transpose(unpadded)
-        permuted = unpadded
-        gradients = SDTWLoss.jacobean_product_squared_euclidean(y_true, y_pred, permuted)
-
-        # NOTE!
-        # The Torch versions all just return the alignment matrix E - this may be to do with how the distances are calculated.
-        # Assume that it may be the case the autodifferentiatior is handling the computation of the gradients for the
-        # Euclidean (or other) distance, and thus the alignment matrix is multiplied across by this to get the correct shape.
-        # Alternatively, maybe Torch handles the gradient tape differently.
-        # As we handle eqch sequence in the batch separately, it's easier to calculate it here.
-
-        return gradients
+        return unpadded
     
-
+    ## backwardsOneSequence()
                 
 
 
