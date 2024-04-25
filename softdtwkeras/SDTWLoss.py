@@ -62,16 +62,11 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
         # Maps over axis 0 (sequences in batch) and compute the loss for each separate sequence independently.
-        unitLossesForEachSequence = tf.map_fn(
+        unitLossesForEachSequence = tf.vectorized_map(
 
-            # map_fn does not expand the tuple; we need to explode it ourselves.
+            # vectorized_map does not expand the tuple; we need to explode it ourselves.
             lambda asTuple: SDTWLoss.computeSingleSequenceLoss(*asTuple, gamma),
             (y_true, y_pred),
-            
-            # We have to specify that the output is just a scalar value, and not a tensor, when te input and output shapes differ
-            # FIXME This is hardcoded single-precision float for now.
-            fn_output_signature = (tf.float32)
-
         )
 
         # Now we just sum over all sequences in the batch for a scalar return value.
