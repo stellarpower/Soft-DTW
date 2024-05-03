@@ -16,36 +16,29 @@ def OptionalGraphFunction(func):
     
 
 
-# Hardcoded temporarily because like Tensorflow, JAx keeps trying to trace on these even when we explciitly
-# tell it that they are static.
-M = N = 8
-Gamma = 1.0
-
-m = n = M
-gamma = Gamma
-
-
-
-
-
 
 class SDTWLoss(tf.keras.losses.Loss):
 
 
-    def __init__(self, gamma: float = 1.0):
+    def __init__(self, outputShape, gamma: float = 1.0):
         super(SDTWLoss, self).__init__()
-        #self.gamma = tf.constant(gamma)
-        self.gamma = gamma
+
+        # We will see if we can use these like constants, as when providing them as arguments
+        # - as is advised for tf.function - the JIT-compiler is trying to trace them and getting itsely
+        # completely tangled in knots.
+        self.outputShape = outputShape
+        self.gamma       = gamma
+
+        self.m = self.n = self.outputShape[1]
 
 
 
     # Native python implementation of the Cython version
     # This allows tensorflow to compile it in the graph, and so is actually optimal over using Cython
-    @staticmethod
-    def softmin3(a, b, c):
-        a /= -gamma
-        b /= -gamma
-        c /= -gamma
+    def softmin3(self, a, b, c):
+        a /= -self.gamma
+        b /= -self.gamma
+        c /= -self.gamma
 
         max_val = jnp.max(jnp.array([a, b, c]))
 
@@ -55,7 +48,7 @@ class SDTWLoss(tf.keras.losses.Loss):
             + jnp.exp(c - max_val)
         
         logarithm = jnp.log(rTotal) + max_val
-        result = -gamma * logarithm
+        result = -self.gamma * logarithm
 
         return result
 
@@ -67,14 +60,13 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         # NEed to specify that m and n are fixed and not inferred at runtime.
         jitFunction = jax2tf.convert(
-            SDTWLoss.callStatic,
+            self.callStatic,
 
             # The batch size will often be None at the point TensorFlow calls in; speify that this needs to be worked out later on.
             # We need to specify twice (as we have two parameters - GT and predicted.)
             polymorphic_shapes = 2 * ["(b, _, _)"],
         )
-        
-        m = n = tf.shape(y_true)[1]
+    
 
         result = jitFunction(y_true, y_pred)#, self.gamma, m, n)
         return result
@@ -84,14 +76,14 @@ class SDTWLoss(tf.keras.losses.Loss):
 
     # This function does not have a custom gradient - we map over the sequences in the batch. 
     # So only computeSingleSequenceLoss() has a custom gradient
-    @staticmethod
+    
     # TODO - should specify gamma in the same way
     #####@functools.partial(jax.jit, static_argnames=['m', 'n', 'gamma'])# NEed to specify that m and n are fixed and not inferred at runtime.
-    def callStatic(y_true, y_pred): #, gamma, m, n):
+    def callStatic(self, y_true, y_pred): #, gamma, m, n):
 
         #@functools.partial(jax.jit, static_argnames=['m', 'n', 'gamma'])
         def t(yT, yP): 
-            thing = SDTWLoss.computeSingleSequenceLoss(yT, yP) #, gamma, m, n)
+            thing = self.computeSingleSequenceLoss(yT, yP) #, gamma, m, n)
             return thing
 
 
@@ -115,9 +107,8 @@ class SDTWLoss(tf.keras.losses.Loss):
 
     # This should be applied on each sequence in the batch.
     # These are separate, so we can do in parallel and make life easier and help the graph optimise.
-    @staticmethod
     #@functools.partial(jax.jit, static_argnames=['m', 'n', 'gamma'])# NEed to specify that m and n are fixed and not inferred at runtime.
-    def computeSingleSequenceLoss(y_true, y_pred): #, gamma, m, n):
+    def computeSingleSequenceLoss(self, y_true, y_pred): #, gamma, m, n):
         
         pairwiseDistanceMatrix = SDTWLoss.computePairwiseDistanceMatrix(y_true, y_pred)
 
@@ -126,7 +117,7 @@ class SDTWLoss(tf.keras.losses.Loss):
         # Scalar loss
         # We no loner need to cache the full versions for the backward pass, seeing as we handle this
         # on a per-sequence basis.
-        lossMatrix = SDTWLoss.computeLossMatrixFromDistanceMatrix_wrapped(pairwiseDistanceMatrix)#, m, n, gamma)
+        lossMatrix = self.computeLossMatrixFromDistanceMatrix_wrapped(pairwiseDistanceMatrix)#, m, n, gamma)
 
         unitLoss = lossMatrix #[m, n]
 
@@ -157,13 +148,12 @@ class SDTWLoss(tf.keras.losses.Loss):
         return pairwiseDistances
     
 
-    @staticmethod
-    def computeFullLossMAtrix(distanceMatrix):
+    def computeFullLossMAtrix(self, distanceMatrix):
 
         # Fill the matrix with infinities - presum to represent infinite distance
         # An prevent an overflow at the edges.
         # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L11
-        lossMatrix = jnp.full((m + 2, n + 2), jnp.inf)
+        lossMatrix = jnp.full((self.m + 2, self.n + 2), jnp.inf)
 
         # Set the top-left item to be zero - it has zero distance form itself(?)
         # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L12
@@ -172,8 +162,8 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
         # but only if the loop condition is a tensor itself.
-        for i in range(1, m + 1):
-            for j in range(1, n + 1):
+        for i in range(1, self.m + 1):
+            for j in range(1, self.n + 1):
                 
                 # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L98C1-L100C1
                 # The if statement is not symbolic - it is evaluated within python, so it can't contain deferred evaluation - 
@@ -194,7 +184,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
                 # D is indexed starting from 0.
 
-                softMinimum = SDTWLoss.softmin3(
+                softMinimum = self.softmin3(
                     lossMatrix[i - 1, j    ],
                     lossMatrix[i - 1, j - 1],
                     lossMatrix[i    , j - 1],
@@ -212,26 +202,35 @@ class SDTWLoss(tf.keras.losses.Loss):
     
     ## wrapped()
 
-    @staticmethod
-    #@functools.partial(jax.jit, static_argnames=['m', 'n', 'gamma'])
-    @jax.custom_vjp
-    def computeLossMatrixFromDistanceMatrix_wrapped(distanceMatrix): #, m, n, gamma):
-        fullMatrix = SDTWLoss.computeFullLossMAtrix(distanceMatrix)
 
-        return fullMatrix[m, n]
+    #@functools.partial(jax.jit, static_argnames=['m', 'n', 'gamma'])
+    def computeLossMatrixFromDistanceMatrix_wrapped(self, distanceMatrix): #, m, n, gamma):
+        @jax.custom_vjp
+        def wrapSelf(distanceMatrix): #, m, n, gamma):
+            fullMatrix = self.computeFullLossMAtrix(distanceMatrix)
+
+            return fullMatrix[self.m, self.n]
+        
+
+        wrapSelf.defvjp(
+            lambda distanceMatrix : self.computeLossMatrixFromDistanceMatrix_forwards     (distanceMatrix ),
+            lambda stash, upstream: self.computeLossMatrixFromDistanceMatrix_backwardsPass(stash, upstream),
+        )
+
+        return wrapSelf(distanceMatrix)
+
 
 
     # _Think_ this is called "R" in the sleepwalking version, for Result.
     # This is the function that returns a cutom gradient. It has direct access to the intermediate calculations
     # through capture and as it is just handling tihs sequence, this allows better parallelisation and is also conceptually
     # easier to step through and debug.
-    @staticmethod
     #@tf.custom_gradient
     #@jax.custom_gradient
 
     # NOT HERE
     # @jax.custom_vjp
-    def computeLossMatrixFromDistanceMatrix_forwards(distanceMatrix): #, m, n, gamma):
+    def computeLossMatrixFromDistanceMatrix_forwards(self, distanceMatrix): #, m, n, gamma):
         
         ##~~
         ##~~# Because of the semantics of custom_gradient, unfortunately the range loop below won;t work in the main function
@@ -252,17 +251,17 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         #return lossMatrix[m, n], backwardsPass
 
-        lossMatrix = SDTWLoss.computeFullLossMAtrix(distanceMatrix)  #, m, n, gamma)
+        lossMatrix = self.computeFullLossMAtrix(distanceMatrix)  #, m, n, gamma)
         stash = (distanceMatrix, lossMatrix) #, m, n, gamma)
 
-        return lossMatrix[m, n], stash
+        return lossMatrix[self.m, self.n], stash
     
     ## computeLossMatrixFromDistanceMatrix()
 
-    def computeLossMatrixFromDistanceMatrix_backwardsPass(stash, upstream):
+    def computeLossMatrixFromDistanceMatrix_backwardsPass(self, stash, upstream):
         distanceMatrix, lossMatrix = stash # , m, n, gamma = stash
 
-        alignmentGradients = SDTWLoss.backwardsOneSequence(distanceMatrix, lossMatrix) #, m, n, gamma)
+        alignmentGradients = self.backwardsOneSequence(distanceMatrix, lossMatrix) #, m, n, gamma)
         gradients = jnp.multiply(upstream, alignmentGradients)
 
         # These are with reference ot the original arguments for the function above.
@@ -272,14 +271,13 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     # One sequence in the batch.
-    @staticmethod
-    @OptionalGraphFunction
-    def backwardsOneSequence(distanceMatrix, lossMatrix): #, m, n, gamma):
+    #@OptionalGraphFunction
+    def backwardsOneSequence(self, distanceMatrix, lossMatrix): #, m, n, gamma):
 
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
         # The alignments array needs to be padded to be larger than the original distances matrix
-        alignmentsShape = (m + 2, n + 2)
+        alignmentsShape = (self.m + 2, self.n + 2)
         
 
         # Called E in the paper
@@ -287,7 +285,7 @@ class SDTWLoss(tf.keras.losses.Loss):
         alignmentsMatrix = jnp.zeros(alignmentsShape)
 
         # Set the bottom-right value as 1.
-        alignmentsMatrix = alignmentsMatrix.at[m + 1, n + 1].set(1)
+        alignmentsMatrix = alignmentsMatrix.at[self.m + 1, self.n + 1].set(1)
 
 
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -303,7 +301,7 @@ class SDTWLoss(tf.keras.losses.Loss):
         
         
         # Copy the bottom-right value into the -infinity padding in the _loss_ matrix.
-        lossMatrix = lossMatrix.at[m + 1, n + 1].set(lossMatrix[m, n])
+        lossMatrix = lossMatrix.at[self.m + 1, self.n + 1].set(lossMatrix[self.m, self.n])
         
         
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -322,16 +320,16 @@ class SDTWLoss(tf.keras.losses.Loss):
         #    for i in tf.range(n, 0, -1):
         # n then m? The torch versions assign the dimensions n then m, which is just confusing.
         # We use m then n.
-        for j in range(n, 0, -1):
-            for i in range(m, 0, -1):
+        for j in range(self.n, 0, -1):
+            for i in range(self.m, 0, -1):
 
                 a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j    ]
                 b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i,     j + 1]
                 c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j + 1]
 
-                a = jnp.exp(a / gamma)
-                b = jnp.exp(b / gamma)
-                c = jnp.exp(c / gamma)
+                a = jnp.exp(a / self.gamma)
+                b = jnp.exp(b / self.gamma)
+                c = jnp.exp(c / self.gamma)
 
 
                 alignment = (
@@ -345,7 +343,7 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
         ## Andthen we need to remove the padding before returning
-        unpadded = alignmentsMatrix[1:(n + 1), 1:(m + 1)]
+        unpadded = alignmentsMatrix[1:(self.n + 1), 1:(self.m + 1)]
 
         return unpadded
     
@@ -355,11 +353,11 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
 
-
-SDTWLoss.computeLossMatrixFromDistanceMatrix_wrapped.defvjp(
-    SDTWLoss.computeLossMatrixFromDistanceMatrix_forwards,
-    SDTWLoss.computeLossMatrixFromDistanceMatrix_backwardsPass
-)
+##~~
+##~~SDTWLoss.computeLossMatrixFromDistanceMatrix_wrapped.defvjp(
+##~~    SDTWLoss.computeLossMatrixFromDistanceMatrix_forwards,
+##~~    SDTWLoss.computeLossMatrixFromDistanceMatrix_backwardsPass
+##~~)
 
 
 
