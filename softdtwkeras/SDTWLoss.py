@@ -1,8 +1,9 @@
 import tensorflow as tf
-import numpy as np, jax, functools
+import numpy as np, jax, functools, time
 import jax.numpy as jnp
 from jax.experimental import jax2tf
 from jax import lax
+from termcolor import colored
 
 
 
@@ -17,7 +18,7 @@ RunEagerly = False #True
 class SDTWLoss(tf.keras.losses.Loss):
 
 
-    def __init__(self, outputShape, gamma: float = 1.0):
+    def __init__(self, outputShape, gamma: float = 1.0, preCompile : bool = True):
         super(SDTWLoss, self).__init__()
 
         # We will see if we can use these like constants, as when providing them as arguments
@@ -38,6 +39,44 @@ class SDTWLoss(tf.keras.losses.Loss):
             # We need to specify twice (as we have two parameters - GT and predicted.)
             polymorphic_shapes = 2 * ["(b, _, _)"],
         )
+
+        if preCompile:
+            self.preCompile()
+
+
+
+    # Attempt to force the JIT compiler to instantiate everything with the correct shape 
+    def preCompile(self):
+        # Invokle the JIT compiler early to pre-cache the compilation before we want to do something real with it.
+        print(colored("Precompiling XLA, for whatever reason this appears very slow.", "cyan"))
+
+        # Create random numbers of the same shape to invoke.
+        y_true = tf.random.uniform(self.outputShape)
+        y_pred = tf.random.uniform(self.outputShape)
+
+        # Invoke the JIT compiler early by sending through some random numbers.
+        # Compute the gradients too, to make sure that the custom gradient gets invoked too.
+
+        startTime = time.time()
+        with tf.GradientTape() as tape:
+
+            # We only want/need to watch for changes in y_pred; y_true is a constant.
+            tape.watch(y_pred)
+            
+
+            # Backwards function is not available - the tf.custom_gradient decorator
+            # staches it away, but it's not returned, even though we explicitly return it.
+            loss = self.call(y_true, y_pred)
+
+
+        # Now compute the backwards pass.   
+        # Tuple for gradient with respect to each variable
+        gradients = tape.gradient(loss, [y_pred])[0]
+        
+        functionTime = time.time() - startTime
+
+        print(colored(f"Precompilation complete in {functionTime:.2g}s", "cyan"))
+
 
 
 
