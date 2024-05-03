@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 
-import numpy as np
+import numpy as np, jax
 import tensorflow as tf
 import pickle, os
 
@@ -99,6 +99,22 @@ class TestSDTWLoss:
             # This should engage the graphcompiler and call through the backend
 
             sdtwLoss = SDTWLoss(gamma = gamma)
+
+            
+
+            # Test that it works okay in Jax
+            # Then it seems that if we perform all differentiation in Jax, TF will just call into this HLO:
+            # https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#saved-model-and-differentiation
+
+            # Must use numpy, not TF tensors.
+            m = n = self.y_true.shape[1]
+
+            SDTWLoss.callStatic(self.y_true, self.y_pred) #, gamma, m, n)
+
+            # NOw to get the gradients
+            gradients = jax.grad(SDTWLoss.callStatic)(self.y_true, self.y_pred) # gamma, m, n)
+
+            print("Calculated JAX version using callStatic only")
             
 
             with tf.GradientTape() as tape:
