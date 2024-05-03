@@ -66,7 +66,13 @@ class SDTWLoss(tf.keras.losses.Loss):
     def call      (self, y_true, y_pred):
 
         # NEed to specify that m and n are fixed and not inferred at runtime.
-        jitFunction = jax2tf.convert(SDTWLoss.callStatic) #, static_argnums = (2, 3))
+        jitFunction = jax2tf.convert(
+            SDTWLoss.callStatic,
+
+            # The batch size will often be None at the point TensorFlow calls in; speify that this needs to be worked out later on.
+            # We need to specify twice (as we have two parameters - GT and predicted.)
+            polymorphic_shapes = 2 * ["(b, _, _)"],
+        )
         
         m = n = tf.shape(y_true)[1]
 
