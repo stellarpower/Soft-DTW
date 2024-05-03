@@ -28,6 +28,17 @@ class SDTWLoss(tf.keras.losses.Loss):
 
         self.m = self.n = self.outputShape[1]
 
+        
+        # Looks like if this appears in call, it is recompiled each time.
+        # So for now ,cache it for the lifetime of the loss function.
+        self.jitFunction = jax2tf.convert(
+            self.callStatic,
+
+            # The batch size will often be None at the point TensorFlow calls in; speify that this needs to be worked out later on.
+            # We need to specify twice (as we have two parameters - GT and predicted.)
+            polymorphic_shapes = 2 * ["(b, _, _)"],
+        )
+
 
 
     # Native python implementation of the Cython version
@@ -52,20 +63,11 @@ class SDTWLoss(tf.keras.losses.Loss):
     
     # Not sure if instance methods can be tf.functions
     # So forward to the static version
-    @tf.function(jit_compile = True)
+    #@tf.function(jit_compile = True, autograph = False)
+    @tf.function(jit_compile = False, autograph = False)
     def call      (self, y_true, y_pred):
 
-        # NEed to specify that m and n are fixed and not inferred at runtime.
-        jitFunction = jax2tf.convert(
-            self.callStatic,
-
-            # The batch size will often be None at the point TensorFlow calls in; speify that this needs to be worked out later on.
-            # We need to specify twice (as we have two parameters - GT and predicted.)
-            polymorphic_shapes = 2 * ["(b, _, _)"],
-        )
-    
-
-        result = jitFunction(y_true, y_pred)#, self.gamma, m, n)
+        result = self.jitFunction(y_true, y_pred)#, self.gamma, m, n)
         return result
 
 
