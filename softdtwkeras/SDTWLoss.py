@@ -11,9 +11,6 @@ from jax import lax
 # This decorator effectively disables the tf.function decorator if eager execution is enabled.
 RunEagerly = False #True 
 
-def OptionalGraphFunction(func):
-    return func if RunEagerly else tf.function(func)
-    
 
 
 
@@ -271,7 +268,6 @@ class SDTWLoss(tf.keras.losses.Loss):
 
 
     # One sequence in the batch.
-    #@OptionalGraphFunction
     def backwardsOneSequence(self, distanceMatrix, lossMatrix): #, m, n, gamma):
 
         ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
