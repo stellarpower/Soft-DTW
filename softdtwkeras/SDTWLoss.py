@@ -197,42 +197,65 @@ class SDTWLoss(tf.keras.losses.Loss):
         # https://github.com/Sleepwalking/pytorch-softdtw/blob/ddff7e3237a3520711f5b48b9e1ffc4647e9ef4a/soft_dtw.py#L12
         lossMatrix = lossMatrix.at[0, 0].set(0.0)
 
+        
 
-        # The graph compiler will automatically convert these loops to the appropriate backend-compatible loops
-        # but only if the loop condition is a tensor itself.
-        for i in range(1, self.m + 1):
-            for j in range(1, self.n + 1):
+             
+            
+        
+        def loopBody(i, j, lossMatrix):  
+            # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L98C1-L100C1
+            # The if statement is not symbolic - it is evaluated within python, so it can't contain deferred evaluation - 
+            # what in effect is happening is the literal value of the predicate is deciding what AST gets passed to the JIT compiler.
+            # Treat it like if constexpr rather than if.
+            lossMatrix = lax.cond(
+                # This is called a predicate, but is not actually a function but the evaluated condition.
+                jnp.isinf(lossMatrix[i, j]),
                 
-                # https://github.com/toinsson/pysdtw/blob/c902025cf8d8926fd4a85ea3620002be9b4715d7/pysdtw/sdtw_cpu.py#L98C1-L100C1
-                # The if statement is not symbolic - it is evaluated within python, so it can't contain deferred evaluation - 
-                # what in effect is happening is the literal value of the predicate is deciding what AST gets passed to the JIT compiler.
-                # Treat it like if constexpr rather than if.
-                lossMatrix = lax.cond(
-                    # This is called a predicate, but is not actually a function but the evaluated condition.
-                    jnp.isinf(lossMatrix[i, j]),
-                    
-                    # Set it in this case.
-                    lambda array: array.at[i, j].set(-jnp.inf),
-                    # Do nothing
-                    lambda array: array,
+                # Set it in this case.
+                lambda array: array.at[i, j].set(-jnp.inf),
+                # Do nothing
+                lambda array: array,
 
-                    # NEed to pass in functionally; assume this helps it optimise.
-                    lossMatrix
-                )
+                # NEed to pass in functionally; assume this helps it optimise.
+                lossMatrix
+            )
 
-                # D is indexed starting from 0.
+            # D is indexed starting from 0.
 
-                softMinimum = self.softmin3(
-                    lossMatrix[i - 1, j    ],
-                    lossMatrix[i - 1, j - 1],
-                    lossMatrix[i    , j - 1],
-                    
-                    #gamma
-                )
-                lossMatrix = lossMatrix.at[i, j].set(
-                    distanceMatrix[i - 1, j - 1]
-                    + softMinimum
-                )
+            softMinimum = self.softmin3(
+                lossMatrix[i - 1, j    ],
+                lossMatrix[i - 1, j - 1],
+                lossMatrix[i    , j - 1],
+                
+                #gamma
+            )
+            lossMatrix = lossMatrix.at[i, j].set(
+                distanceMatrix[i - 1, j - 1]
+                + softMinimum
+            )
+            return lossMatrix
+
+        # for loops are unrolled inline in Jax - this means we have enormous compile times, as the entire body is flattened out to source code
+        # and then the optimiser works over it.
+        # By using the backend loop, this should pass down to HLO in a more idiomatic form.
+        
+        # for i in range(1, self.m + 1):
+        lossMatrix = jax.lax.fori_loop(
+            1, self.m + 1,
+
+            # for j in range(1, self.n + 1):
+            lambda i, outerAccumulator: jax.lax.fori_loop(
+                1, self.n + 1,
+
+                # innerAccumulator is the updated loss matrix from one iteration of the inner loop.
+                lambda j, innerAccumulator: loopBody(i, j, innerAccumulator),
+
+                # outerAccumulator is the updated loss matrix from one full pass of the inner loop (i.e. one outer loop iteration)
+                outerAccumulator
+            ),
+            lossMatrix
+        )
+        
 
         #stash = (distanceMatrix, lossMatrix, m, n, gamma)
         
