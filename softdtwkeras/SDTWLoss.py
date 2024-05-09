@@ -380,26 +380,58 @@ class SDTWLoss(tf.keras.losses.Loss):
         #    for i in tf.range(n, 0, -1):
         # n then m? The torch versions assign the dimensions n then m, which is just confusing.
         # We use m then n.
-        for j in range(self.n, 0, -1):
-            for i in range(self.m, 0, -1):
-
-                a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j    ]
-                b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i,     j + 1]
-                c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j + 1]
-
-                a = jnp.exp(a / self.gamma)
-                b = jnp.exp(b / self.gamma)
-                c = jnp.exp(c / self.gamma)
 
 
-                alignment = (
+        def loopBody(iForwards, jForwards, alignmentsMatrix):
 
-                        a * alignmentsMatrix[i + 1, j    ]
-                     +  b * alignmentsMatrix[i,     j + 1]
-                     +  c * alignmentsMatrix[i + 1, j + 1]
-                )
-                
-                alignmentsMatrix = alignmentsMatrix.at[i, j].set(alignment)
+            # Jax's fori_loop cannot go backwards.
+            # We need to subtract the indices here.
+            j = self.n - jForwards
+            i = self.m - iForwards
+
+
+            a =  lossMatrix[i + 1, j    ]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j    ]
+            b =  lossMatrix[i,     j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i,     j + 1]
+            c =  lossMatrix[i + 1, j + 1]   -   lossMatrix[i, j]   -   paddedDistanceMatrix[i + 1, j + 1]
+
+            a = jnp.exp(a / self.gamma)
+            b = jnp.exp(b / self.gamma)
+            c = jnp.exp(c / self.gamma)
+
+
+            alignment = (
+
+                    a * alignmentsMatrix[i + 1, j    ]
+                 +  b * alignmentsMatrix[i,     j + 1]
+                 +  c * alignmentsMatrix[i + 1, j + 1]
+            )
+
+            alignmentsMatrix = alignmentsMatrix.at[i, j].set(alignment)
+
+            return alignmentsMatrix
+
+
+
+        # Jax's fori_loop cannot go backwards.
+        # We negate in the loop body above.
+
+        # for j in range(self.n, 0, -1):
+        alignmentsMatrix = jax.lax.fori_loop(
+            0, self.n,
+
+            # for i in range(self.m, 0, -1):
+            lambda jForwards, outerAccumulator: jax.lax.fori_loop(
+                0, self.m,
+
+                # innerAccumulator is the updated loss matrix from one iteration of the inner loop.
+                lambda iForwards, innerAccumulator: loopBody(iForwards, jForwards, innerAccumulator),
+
+                # outerAccumulator is the updated loss matrix from one full pass of the inner loop (i.e. one outer loop iteration)
+                outerAccumulator
+            ),
+            alignmentsMatrix 
+        )
+        
 
 
         ## Andthen we need to remove the padding before returning
